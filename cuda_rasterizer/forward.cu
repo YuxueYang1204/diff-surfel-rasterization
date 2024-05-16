@@ -3,7 +3,7 @@
  * GRAPHDECO research group, https://team.inria.fr/graphdeco
  * All rights reserved.
  *
- * This software is free for non-commercial, research and evaluation use 
+ * This software is free for non-commercial, research and evaluation use
  * under the terms of the LICENSE.md file.
  *
  * For inquiries contact  george.drettakis@inria.fr
@@ -19,8 +19,8 @@ namespace cg = cooperative_groups;
 // coefficients of each Gaussian to a simple RGB color.
 __device__ glm::vec3 computeColorFromSH(int idx, int deg, int max_coeffs, const glm::vec3* means, glm::vec3 campos, const float* shs, bool* clamped)
 {
-	// The implementation is loosely based on code for 
-	// "Differentiable Point-Based Radiance Fields for 
+	// The implementation is loosely based on code for
+	// "Differentiable Point-Based Radiance Fields for
 	// Efficient View Synthesis" by Zhang et al. (2022)
 	glm::vec3 pos = means[idx];
 	glm::vec3 dir = pos - campos;
@@ -80,7 +80,7 @@ __device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 		viewmat[0],viewmat[1],viewmat[2],
 		viewmat[4],viewmat[5],viewmat[6],
 		viewmat[8],viewmat[9],viewmat[10]
-	); 
+	);
 	const glm::vec3 cam_pos = glm::vec3(viewmat[12], viewmat[13], viewmat[14]); // camera center
 	const glm::mat4 P = glm::mat4(
 		intrins.x, 0.0, 0.0, 0.0,
@@ -89,7 +89,7 @@ __device__ bool computeTransMat(const glm::vec3 &p_world, const glm::vec4 &quat,
 		0.0, 0.0, 0.0, 0.0
 	);
 
-	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix 
+	// Make the geometry of 2D Gaussian as a Homogeneous transformation matrix
 	// under the camera view, See Eq. (5) in 2DGS' paper.
 	glm::vec3 p_view = W * p_world + cam_pos;
 	glm::mat3 R = quat_to_rotmat(quat) * scale_to_mat({scale.x, scale.y, 1.0f}, 1.0f);
@@ -139,20 +139,20 @@ __device__ bool computeAABB(const float *transMat, float2 & center, float2 & ext
 	);
 
 	float d = glm::dot(glm::vec3(1.0, 1.0, -1.0), T[3] * T[3]);
-	
+
 	if (d == 0.0f) return false;
 
 	glm::vec3 f = glm::vec3(1.0, 1.0, -1.0) * (1.0f / d);
 
 	glm::vec3 p = glm::vec3(
 		glm::dot(f, T[0] * T[3]),
-		glm::dot(f, T[1] * T[3]), 
+		glm::dot(f, T[1] * T[3]),
 		glm::dot(f, T[2] * T[3]));
-	
-	glm::vec3 h0 = p * p - 
+
+	glm::vec3 h0 = p * p -
 		glm::vec3(
 			glm::dot(f, T[0] * T[0]),
-			glm::dot(f, T[1] * T[1]), 
+			glm::dot(f, T[1] * T[1]),
 			glm::dot(f, T[2] * T[2])
 		);
 
@@ -204,11 +204,11 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	float3 p_view;
 	if (!in_frustum(idx, orig_points, viewmatrix, projmatrix, prefiltered, p_view))
 		return;
-	
+
 	float4 intrins = {focal_x, focal_y, float(W)/2.0, float(H)/2.0};
 	glm::vec2 scale = scales[idx];
 	glm::vec4 quat = rotations[idx];
-	
+
 	const float* transMat;
 	bool ok;
 	float3 normal;
@@ -222,7 +222,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 		if (!ok) return;
 		transMat = transMats + idx * 9;
 	}
-	
+
 	//  compute center and extent
 	float2 center;
 	float2 extent;
@@ -243,7 +243,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 	if ((rect_max.x - rect_min.x) * (rect_max.y - rect_min.y) == 0)
 		return;
 
-	// compute colors 
+	// compute colors
 	if (colors_precomp == nullptr) {
 		glm::vec3 result = computeColorFromSH(idx, D, M, (glm::vec3*)orig_points, *cam_pos, shs, clamped);
 		rgb[idx * C + 0] = result.x;
@@ -260,7 +260,7 @@ __global__ void preprocessCUDA(int P, int D, int M,
 }
 
 // Main rasterization method. Collaboratively works on one tile per
-// block, each thread treats one pixel. Alternates between fetching 
+// block, each thread treats one pixel. Alternates between fetching
 // and rasterizing data.
 template <uint32_t CHANNELS>
 __global__ void __launch_bounds__(BLOCK_X * BLOCK_Y)
@@ -278,7 +278,10 @@ renderCUDA(
 	uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ bg_color,
 	float* __restrict__ out_color,
-	float* __restrict__ out_others)
+	float* __restrict__ out_others,
+	float* __restrict__ transmittance,
+	int* __restrict__ num_covered_pixels,
+	bool record_transmittance)
 {
 	// Identify current tile and associated min/max pixel range.
 	auto block = cg::this_thread_block();
@@ -371,16 +374,16 @@ renderCUDA(
 			// 3d homogeneous point to 2d point on the splat
 			float2 s = {p.x / p.z, p.y / p.z};
 			// 3d distance. Compute Mahalanobis distance in the canonical splat' space
-			float rho3d = (s.x * s.x + s.y * s.y); 
-			
-			// Add low pass filter according to Botsch et al. [2005], 
-			// see Eq. (11) from 2DGS paper. 
+			float rho3d = (s.x * s.x + s.y * s.y);
+
+			// Add low pass filter according to Botsch et al. [2005],
+			// see Eq. (11) from 2DGS paper.
 			float2 xy = collected_xy[j];
 			float2 d = {xy.x - pixf.x, xy.y - pixf.y};
 			// 2d screen distance
-			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y); 
+			float rho2d = FilterInvSquare * (d.x * d.x + d.y * d.y);
 			float rho = min(rho3d, rho2d);
-			
+
 			float depth = (rho3d <= rho2d) ? (s.x * Tw.x + s.y * Tw.y) + Tw.z : Tw.z; // splat depth
 			if (depth < NEAR_PLANE) continue;
 			float4 nor_o = collected_normal_opacity[j];
@@ -393,8 +396,12 @@ renderCUDA(
 			// Eq. (2) from 3D Gaussian splatting paper.
 			// Obtain alpha by multiplying with Gaussian opacity
 			// and its exponential falloff from mean.
-			// Avoid numerical instabilities (see paper appendix). 
+			// Avoid numerical instabilities (see paper appendix).
 			float alpha = min(0.99f, nor_o.w * exp(power));
+			if (record_transmittance){
+				atomicAdd(&transmittance[collected_id[j]], T * alpha);
+				atomicAdd(&num_covered_pixels[collected_id[j]], 1);
+			}
 			if (alpha < 1.0f / 255.0f)
 				continue;
 			float test_T = T * (1 - alpha);
@@ -477,7 +484,10 @@ void FORWARD::render(
 	uint32_t* n_contrib,
 	const float* bg_color,
 	float* out_color,
-	float* out_others)
+	float* out_others,
+	float* transmittance,
+	int* num_covered_pixels,
+	bool record_transmittance)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> > (
 		ranges,
@@ -493,7 +503,10 @@ void FORWARD::render(
 		n_contrib,
 		bg_color,
 		out_color,
-		out_others);
+		out_others,
+		transmittance,
+		num_covered_pixels,
+		record_transmittance);
 }
 
 void FORWARD::preprocess(int P, int D, int M,
@@ -533,7 +546,7 @@ void FORWARD::preprocess(int P, int D, int M,
 		clamped,
 		transMat_precomp,
 		colors_precomp,
-		viewmatrix, 
+		viewmatrix,
 		projmatrix,
 		cam_pos,
 		W, H,
